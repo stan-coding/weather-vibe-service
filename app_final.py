@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from contextlib import asynccontextmanager
+from typing import Annotated
 
 import httpx
 from dotenv import load_dotenv
@@ -13,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 load_dotenv()  # читает файл .env, если он есть; уже заданные через export переменные не перезаписывает
 
 APP_NAME = os.getenv("APP_NAME", "Weather Vibe")
-APP_VERSION = "0.3.0"
+APP_VERSION = "0.4.0"
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Penza")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "5"))  # сколько секунд ждать ответа от сервиса погоды
@@ -83,7 +84,7 @@ def request_json(url: str, params: dict) -> dict:
         response.raise_for_status()  # если сервис вернул 4xx/5xx — считаем это ошибкой
         return response.json()
     except (httpx.HTTPError, ValueError) as error:
-        raise WeatherServiceError(str(error)) from error
+        raise WeatherServiceError(f"{url}: {error}") from error
 
 
 def find_city(city: str) -> dict:
@@ -145,6 +146,69 @@ def load_weather(city: str) -> dict:
         raise HTTPException(status_code=503, detail="Сервис погоды временно недоступен, попробуйте позже")
 
 
+# ---------- Рекомендации ----------
+# Уровни по ощущаемой температуре: (верхняя граница °C, уровень, что надеть).
+# Берётся первая строка, где ощущаемая температура меньше границы.
+OUTFIT_LEVELS = [
+    (-15, "очень холодно", ["пуховик", "термобельё", "тёплая шапка", "шарф", "варежки", "зимние ботинки"]),
+    (-5, "холодно", ["зимняя куртка", "тёплый свитер", "шапка", "перчатки", "утеплённая обувь"]),
+    (5, "прохладно", ["тёплая куртка или пальто", "свитер или худи", "шапка", "закрытая обувь"]),
+    (12, "свежо", ["лёгкая куртка или ветровка", "кофта", "джинсы"]),
+    (18, "комфортно", ["толстовка или кардиган", "футболка", "кроссовки"]),
+    (25, "тепло", ["футболка", "лёгкие брюки или джинсы", "кеды"]),
+    (float("inf"), "жарко", ["шорты или лёгкое платье", "одежда из хлопка или льна", "кепка или панама"]),
+]
+
+# Музыка по типу погоды: настроение и жанры.
+MUSIC_BY_CATEGORY = {
+    "clear": ("бодрое и солнечное", ["поп", "фанк", "инди-поп"]),
+    "cloudy": ("спокойное", ["инди-рок", "соул", "альтернатива"]),
+    "rain": ("уютное и задумчивое", ["лоу-фай", "джаз", "акустика"]),
+    "snow": ("тихое и сказочное", ["эмбиент", "неоклассика", "классика"]),
+    "fog": ("загадочное", ["трип-хоп", "эмбиент", "пост-рок"]),
+    "storm": ("драматичное", ["рок", "саундтреки к фильмам", "симфоническая музыка"]),
+}
+
+STRONG_WIND_MS = 8  # с какой скорости ветра (м/с) советуем защиту от ветра
+
+
+def outfit_advice(feels_like_c: float, category: str, wind_speed_ms: float = 0) -> dict:
+    """Что надеть: по ощущаемой температуре, осадкам и ветру."""
+    for upper, level, items in OUTFIT_LEVELS:
+        if feels_like_c < upper:
+            break
+
+    extras = []
+    if category in ("rain", "storm"):
+        extras.append("зонт или дождевик и непромокаемая обувь")
+    if category == "snow":
+        extras.append("обувь с нескользящей подошвой")
+    if category == "fog":
+        extras.append("светлая одежда или светоотражатели, чтобы вас было видно")
+    if category == "clear" and feels_like_c >= 18:
+        extras.append("солнцезащитные очки и крем от загара")
+    if wind_speed_ms >= STRONG_WIND_MS:
+        extras.append("ветрозащитная куртка с капюшоном")
+    if category == "storm":
+        extras.append("по возможности переждите грозу в помещении")
+
+    logger.debug("Одежда: %.1f°C, %s, ветер %.1f м/с -> %s", feels_like_c, category, wind_speed_ms, level)
+    return {"level": level, "items": list(items), "extras": extras}
+
+
+def music_advice(category: str, feels_like_c: float) -> dict:
+    """Какую музыку послушать: по типу погоды, с поправкой на жару и мороз."""
+    mood, genres = MUSIC_BY_CATEGORY.get(category, MUSIC_BY_CATEGORY["cloudy"])
+    genres = list(genres)  # копия, чтобы не менять общий словарь
+    if feels_like_c >= 25:
+        genres.append("регги")
+    elif feels_like_c < -10:
+        genres.append("тёплый соул")
+
+    logger.debug("Музыка: %s, %.1f°C -> %s", category, feels_like_c, genres)
+    return {"mood": mood, "genres": genres}
+
+
 # ---------- Приложение ----------
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -185,9 +249,48 @@ def version():
     return {"app": APP_NAME, "version": APP_VERSION}
 
 
+# Параметр города: один раз описываем правила, используем во всех маршрутах
+City = Annotated[
+    str,
+    Query(min_length=2, max_length=80, description="Город, например Penza или Москва"),
+]
+
+
 @app.get("/weather")
-def weather(
-    city: str = Query(DEFAULT_CITY, min_length=2, max_length=80, description="Город, например Penza или Москва"),
-):
+def weather(city: City = DEFAULT_CITY):
     """Текущая погода в городе."""
     return load_weather(city)
+
+
+@app.get("/outfit")
+def outfit(city: City = DEFAULT_CITY):
+    """Что надеть по текущей погоде."""
+    w = load_weather(city)
+    return {
+        "city": w["city"],
+        "feels_like_c": w["feels_like_c"],
+        "description": w["description"],
+        "outfit": outfit_advice(w["feels_like_c"], w["category"], w["wind_speed_ms"]),
+    }
+
+
+@app.get("/music")
+def music(city: City = DEFAULT_CITY):
+    """Какую музыку послушать по текущей погоде."""
+    w = load_weather(city)
+    return {
+        "city": w["city"],
+        "description": w["description"],
+        "music": music_advice(w["category"], w["feels_like_c"]),
+    }
+
+
+@app.get("/vibe")
+def vibe(city: City = DEFAULT_CITY):
+    """Всё сразу: погода, одежда и музыка."""
+    w = load_weather(city)
+    return {
+        "weather": w,
+        "outfit": outfit_advice(w["feels_like_c"], w["category"], w["wind_speed_ms"]),
+        "music": music_advice(w["category"], w["feels_like_c"]),
+    }
