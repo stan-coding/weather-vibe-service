@@ -5,6 +5,7 @@ import os
 import time
 from contextlib import asynccontextmanager
 from typing import Annotated
+from typing import Annotated, Literal
 
 import httpx
 from dotenv import load_dotenv
@@ -14,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 load_dotenv()  # читает файл .env, если он есть; уже заданные через export переменные не перезаписывает
 
 APP_NAME = os.getenv("APP_NAME", "Weather Vibe")
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.5.0"
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Penza")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "5"))  # сколько секунд ждать ответа от сервиса погоды
@@ -295,4 +296,22 @@ def vibe(city: City = DEFAULT_CITY):
         "weather": w,
         "outfit": outfit_advice(w["feels_like_c"], w["category"], w["wind_speed_ms"]),
         "music": music_advice(w["category"], w["feels_like_c"]),
+    }
+
+# Типы погоды, которые понимает ручной режим
+Category = Literal["clear", "cloudy", "rain", "snow", "fog", "storm"]
+
+
+@app.get("/advice")
+def advice(
+    temp: Annotated[float, Query(ge=-60, le=60, description="Ощущаемая температура, °C")],
+    category: Annotated[Category, Query(description="Тип погоды")] = "clear",
+    wind: Annotated[float, Query(ge=0, le=60, description="Скорость ветра, м/с")] = 0,
+):
+    """Ручной режим: рекомендации по заданной погоде, без запроса в интернет."""
+    logger.info("Ручной режим: %.1f°C, %s, ветер %.1f м/с", temp, category, wind)
+    return {
+        "input": {"feels_like_c": temp, "category": category, "wind_speed_ms": wind},
+        "outfit": outfit_advice(temp, category, wind),
+        "music": music_advice(category, temp),
     }
