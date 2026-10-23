@@ -14,7 +14,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 load_dotenv()  # читает файл .env, если он есть; уже заданные через export переменные не перезаписывает
 
 APP_NAME = os.getenv("APP_NAME", "Weather Vibe")
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Penza")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "5"))  # сколько секунд ждать ответа от сервиса погоды
@@ -89,11 +89,13 @@ def request_json(url: str, params: dict) -> dict:
 
 def find_city(city: str) -> dict:
     """Найти координаты города по названию."""
-    data = request_json(GEOCODING_URL, {"name": city, "count": 1, "language": "ru", "format": "json"})
+    data = request_json(GEOCODING_URL, {"name": city, "count": 10, "language": "ru", "format": "json"})
     results = data.get("results")  # если ничего не найдено, ключа results в ответе нет
     if not results:
         raise CityNotFoundError(city)
-    return results[0]
+    # Поиск идёт по началу названия и может вернуть несколько мест с похожими именами.
+    # Берём самое крупное по населению: обычно это и есть нужный город.
+    return max(results, key=lambda r: r.get("population") or 0)
 
 
 def get_weather(city: str) -> dict:
