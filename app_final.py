@@ -15,7 +15,7 @@ from fastapi import FastAPI, HTTPException, Query, Request
 load_dotenv()  # читает файл .env, если он есть; уже заданные через export переменные не перезаписывает
 
 APP_NAME = os.getenv("APP_NAME", "Weather Vibe")
-APP_VERSION = "0.5.0"
+APP_VERSION = "1.0.0"
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "Penza")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 REQUEST_TIMEOUT = float(os.getenv("REQUEST_TIMEOUT", "5"))  # сколько секунд ждать ответа от сервиса погоды
