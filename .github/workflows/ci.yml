@@ -55,4 +55,5 @@ jobs:
             requirements.txt
             .env.example
             README.md
+          include-hidden-files: true
           retention-days: 30
